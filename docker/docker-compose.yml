@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
 
@@ -16,8 +16,9 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 3s
-      retries: 3
+      timeout: 5s
+      retries: 5
+
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.6
@@ -41,8 +42,8 @@ services:
       test: ["CMD-SHELL", "curl -u elastic:${ES_PASS:-jgYsL5-kztDUSd8HyiNd} -f http://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 60s
+      retries: 30
+      start_period: 180s
     ulimits:
       memlock:
         soft: -1
@@ -50,6 +51,8 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+
+
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.19.6
@@ -76,6 +79,8 @@ services:
       retries: 10
       start_period: 120s
 
+
+
   ddos-app:
     build:
       context: ..
@@ -84,25 +89,17 @@ services:
     privileged: true
     network_mode: host
     volumes:
-      - /lib/modules:/lib/modules:ro
-      - /sys:/sys:ro
-      - /proc:/proc:ro
-      - /usr/src:/usr/src:ro
-      - /usr/include:/usr/include:ro
+      - ../config:/app/config
+      - ../models:/app/models
       - ../logs:/app/logs
-      - ../config/kibana/dashboards:/app/dashboards:ro
     environment:
       - NETWORK_INTERFACE=${NETWORK_INTERFACE:-ens33}
       - CAPTURE_INTERFACE=${CAPTURE_INTERFACE:-ens33}
       - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
-      - ATTACK_CHANNEL=attack_detected
       - ES_HOST=http://127.0.0.1:9200
       - ES_USER=elastic
       - ES_PASS=${ES_PASS:-jgYsL5-kztDUSd8HyiNd}
-      - KIBANA_SYSTEM_PASS=${KIBANA_SYSTEM_PASS:-ftcy6DoNKkMbmRrUlxgg}
-      - ES_BLOCK_INDEX_PREFIX=enforcement-blocks
-      - ES_DROP_INDEX_PREFIX=xdp-drops
       - ES_INDEX_PREFIX=netflows
       - ARTIFACTS_DIR=/app/models
       - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.65}
@@ -121,6 +118,8 @@ services:
       - NET_ADMIN
       - BPF
       - PERFMON
+
+
 
 networks:
   ddos-internal:
