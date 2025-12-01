@@ -14,36 +14,26 @@ ENV DEBIAN_FRONTEND=noninteractive
 # =============================================================================
 # Build Stage: Compile XDP Program
 # =============================================================================
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --fix-missing \
     clang \
     llvm \
     libbpf-dev \
     linux-tools-common \
     linux-tools-generic \
-    bpftool \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Copy XDP source
+# Copy XDP source and vmlinux.h
 COPY app/xdp_ip_blacklist.c /build/
-
-# Generate vmlinux.h from host BTF (if not provided)
-# Note: This requires kernel BTF support on build host
-RUN if [ ! -f /build/vmlinux.h ]; then \
-        if [ -f /sys/kernel/btf/vmlinux ]; then \
-            bpftool btf dump file /sys/kernel/btf/vmlinux format c > /build/vmlinux.h; \
-        else \
-            echo "WARNING: /sys/kernel/btf/vmlinux not found - using fallback"; \
-            echo "// Fallback vmlinux.h - replace with proper BTF dump" > /build/vmlinux.h; \
-        fi \
-    fi
+COPY app/vmlinux.h /build/
 
 # Compile XDP program to BPF object
 RUN clang -O2 -g -target bpf \
     -D__TARGET_ARCH_x86 \
     -I/usr/include/bpf \
+    -I/build \
     -c xdp_ip_blacklist.c \
     -o xdp_ip_blacklist.o
 
@@ -57,12 +47,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # =============================================================================
 # Install Runtime Dependencies (NO BCC, NO linux-headers)
 # =============================================================================
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --fix-missing \
     python3 \
     python3-pip \
     python3-dev \
-    libbpf1 \
-    bpftool \
+    libbpf0 \
     linux-tools-common \
     linux-tools-generic \
     libpcap-dev \
@@ -79,9 +68,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
-# Create symlink for bpftool
+# Create symlink for bpftool - must match host kernel
 # =============================================================================
-RUN find /usr/lib/linux-tools -name "bpftool" -type f 2>/dev/null | head -1 | xargs -I {} ln -sf {} /usr/sbin/bpftool || true
+RUN KERNEL_VERSION=$(ls /usr/lib/linux-tools/ | grep -E '^[0-9]' | sort -V | tail -1) && \
+    if [ -f "/usr/lib/linux-tools/${KERNEL_VERSION}/bpftool" ]; then \
+        ln -sf "/usr/lib/linux-tools/${KERNEL_VERSION}/bpftool" /usr/sbin/bpftool && \
+        ln -sf "/usr/lib/linux-tools/${KERNEL_VERSION}/bpftool" /usr/bin/bpftool; \
+    fi && \
+    bpftool version || echo "WARNING: bpftool not available"
 
 # =============================================================================
 # Install Python Dependencies

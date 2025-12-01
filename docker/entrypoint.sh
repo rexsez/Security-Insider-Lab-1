@@ -302,5 +302,3 @@ echo "  2. ML Pipeline    - NFStream -> ML Inference"
 echo ""
 echo "Logs available at: /app/logs/"
 echo "=============================================="
-
-exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/ddos-defense.conf

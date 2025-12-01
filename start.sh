@@ -16,10 +16,10 @@ DOCKER_DIR="$SCRIPT_DIR/docker"
 DATA_DIR="$SCRIPT_DIR/data"
 LOGS_DIR="$SCRIPT_DIR/logs"
 
-# XDP files should be in root directory alongside start.sh
-XDP_SOURCE="$SCRIPT_DIR/xdp_ip_blacklist_bcc.c"
-XDP_OUTPUT="$SCRIPT_DIR/xdp_ip_blacklist.o"
-VMLINUX_H="$SCRIPT_DIR/vmlinux.h"
+# XDP files in app/ directory
+XDP_SOURCE="app/xdp_ip_blacklist.c"
+XDP_OUTPUT="app/xdp_ip_blacklist.o"
+VMLINUX_H="app/vmlinux.h"
 
 # Colors
 RED='\033[0;31m'
@@ -141,7 +141,7 @@ build_xdp_program() {
     # Generate vmlinux.h if needed
     if [ ! -f "$VMLINUX_H" ]; then
         log_info "Generating vmlinux.h from kernel BTF..."
-        
+
         if [ ! -f /sys/kernel/btf/vmlinux ]; then
             log_error "/sys/kernel/btf/vmlinux not found"
             echo ""
@@ -151,21 +151,21 @@ build_xdp_program() {
             echo "  2. Download vmlinux.h from: https://github.com/aquasecurity/btfhub"
             exit 1
         fi
-        
+
         bpftool btf dump file /sys/kernel/btf/vmlinux format c > "$VMLINUX_H"
         log_success "Generated $VMLINUX_H"
     fi
 
     # Compile XDP program
     log_info "Compiling: $XDP_SOURCE -> $XDP_OUTPUT"
-    
+
     clang -O2 -g -target bpf \
         -D__TARGET_ARCH_x86 \
         -I/usr/include/bpf \
         -I"$(dirname "$VMLINUX_H")" \
         -c "$XDP_SOURCE" \
         -o "$XDP_OUTPUT"
-    
+
     # Strip debug symbols (optional, reduces size)
     llvm-strip -g "$XDP_OUTPUT" 2>/dev/null || true
 
@@ -207,7 +207,7 @@ detect_network_interface() {
     export CAPTURE_INTERFACE="$DETECTED_INTERFACE"
 
     log_success "Using interface: $NETWORK_INTERFACE"
-    
+
     # Show interface details
     log_info "Interface details:"
     ip addr show "$NETWORK_INTERFACE" | grep -E "inet |link/ether" | sed 's/^/         /'
@@ -303,11 +303,11 @@ start_services() {
     echo ""
 
     cd "$DOCKER_DIR"
-    
+
     # Export variables for docker-compose
     export NETWORK_INTERFACE
     export CAPTURE_INTERFACE
-    
+
     # Build and start
     docker compose build --no-cache
     docker compose up -d
@@ -350,21 +350,21 @@ show_status() {
     echo ""
 
     log_info "Health Checks:"
-    
+
     # Check Elasticsearch
     if docker inspect --format='{{.State.Health.Status}}' ddos-elasticsearch 2>/dev/null | grep -q "healthy"; then
         log_success "Elasticsearch: healthy"
     else
         log_warning "Elasticsearch: not ready"
     fi
-    
+
     # Check Redis
     if docker inspect --format='{{.State.Health.Status}}' ddos-redis 2>/dev/null | grep -q "healthy"; then
         log_success "Redis: healthy"
     else
         log_warning "Redis: not ready"
     fi
-    
+
     # Check XDP in app container
     if docker ps --format '{{.Names}}' | grep -q "^ddos-app$"; then
         if docker exec ddos-app bpftool prog show 2>/dev/null | grep -q "xdp"; then
@@ -373,7 +373,7 @@ show_status() {
             log_warning "XDP program: not loaded"
         fi
     fi
-    
+
     echo ""
 }
 
