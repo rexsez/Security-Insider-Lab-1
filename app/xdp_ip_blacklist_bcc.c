@@ -1,40 +1,57 @@
-// xdp_ip_blacklist_bcc.c
-// BCC-compatible XDP IP blacklist with dual blocking and per-drop logging
-// For use with BCC Python loader
+// xdp_ip_blacklist.c
+// CO-RE XDP IP blacklist with dual blocking and per-drop logging
+// For use with libbpf (no BCC runtime compilation)
 
-#include <uapi/linux/bpf.h>
-#include <uapi/linux/if_ether.h>
-#include <uapi/linux/ip.h>
-#include <uapi/linux/tcp.h>
-#include <uapi/linux/in.h>
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
+#include <bpf/bpf_endian.h>
 
 // Maximum number of blacklisted IPs
 #define MAX_BLACKLIST_ENTRIES 10000
+#define ETH_P_IP 0x0800
+#define IPPROTO_TCP 6
 
 // Structure to store blacklist entry metadata
 struct blacklist_entry {
-    u64 detection_event_id_high;  // UUID high 64 bits
-    u64 detection_event_id_low;   // UUID low 64 bits
-    u64 block_timestamp;          // When this IP was blacklisted
-    u32 drop_count;               // Number of packets dropped from this IP
+    __u64 detection_event_id_high;  // UUID high 64 bits
+    __u64 detection_event_id_low;   // UUID low 64 bits
+    __u64 block_timestamp;          // When this IP was blacklisted
+    __u32 drop_count;               // Number of packets dropped from this IP
 };
 
 // Structure for per-drop event logging
 struct drop_event {
-    u32 src_ip;
-    u64 timestamp;
-    u64 detection_event_id_high;
-    u64 detection_event_id_low;
-    u8 drop_reason;  // 1=IP_BLACKLIST, 2=CONTENT_FILTER
+    __u32 src_ip;
+    __u64 timestamp;
+    __u64 detection_event_id_high;
+    __u64 detection_event_id_low;
+    __u8 drop_reason;  // 1=IP_BLACKLIST, 2=CONTENT_FILTER
 };
 
-// BPF Maps - BCC syntax
-BPF_HASH(ip_blacklist, u32, struct blacklist_entry, MAX_BLACKLIST_ENTRIES);
-BPF_PERCPU_ARRAY(drop_cnt, u64, 1);
-BPF_PERF_OUTPUT(drop_events);
+// BPF Maps - libbpf syntax
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, MAX_BLACKLIST_ENTRIES);
+    __type(key, __u32);
+    __type(value, struct blacklist_entry);
+} ip_blacklist SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} drop_cnt SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+    __uint(key_size, sizeof(__u32));
+    __uint(value_size, sizeof(__u32));
+} drop_events SEC(".maps");
 
 // Helper: Check if payload starts with "Test Data"
-static inline int mem_match_testdata(void *ptr, void *end) {
+static __always_inline int mem_match_testdata(void *ptr, void *end) {
     char pattern[] = "Test Data";
     int len = 9;  // Length of "Test Data"
     
@@ -58,9 +75,9 @@ static inline int mem_match_testdata(void *ptr, void *end) {
 }
 
 // Helper: Send drop event to userspace
-static inline void log_drop_event(struct xdp_md *ctx, u32 src_ip, 
-                                   struct blacklist_entry *entry, 
-                                   u8 reason) {
+static __always_inline void log_drop_event(struct xdp_md *ctx, __u32 src_ip, 
+                                           struct blacklist_entry *entry, 
+                                           __u8 reason) {
     struct drop_event event = {};
     event.src_ip = src_ip;
     event.timestamp = bpf_ktime_get_ns();
@@ -71,10 +88,12 @@ static inline void log_drop_event(struct xdp_md *ctx, u32 src_ip,
         event.detection_event_id_low = entry->detection_event_id_low;
     }
     
-    drop_events.perf_submit(ctx, &event, sizeof(event));
+    bpf_perf_event_output(ctx, &drop_events, BPF_F_CURRENT_CPU, 
+                          &event, sizeof(event));
 }
 
 // Main XDP Program
+SEC("xdp")
 int xdp_ip_blacklist_filter(struct xdp_md *ctx) {
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
@@ -85,7 +104,7 @@ int xdp_ip_blacklist_filter(struct xdp_md *ctx) {
         return XDP_PASS;
     
     // Only process IPv4 packets
-    if (eth->h_proto != htons(ETH_P_IP))
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
         return XDP_PASS;
     
     // Parse IP header
@@ -93,19 +112,19 @@ int xdp_ip_blacklist_filter(struct xdp_md *ctx) {
     if ((void *)ip + sizeof(*ip) > data_end)
         return XDP_PASS;
     
-    u32 src_ip = ip->saddr;  // Source IP in network byte order
+    __u32 src_ip = BPF_CORE_READ(ip, saddr);  // Source IP in network byte order
     
     // ========================================
     // CHECK 1: IP Blacklist Lookup
     // ========================================
-    struct blacklist_entry *entry = ip_blacklist.lookup(&src_ip);
+    struct blacklist_entry *entry = bpf_map_lookup_elem(&ip_blacklist, &src_ip);
     if (entry) {
         // IP is blacklisted - increment drop counter
         __sync_fetch_and_add(&entry->drop_count, 1);
         
         // Update global drop counter
-        u32 key = 0;
-        u64 *val = drop_cnt.lookup(&key);
+        __u32 key = 0;
+        __u64 *val = bpf_map_lookup_elem(&drop_cnt, &key);
         if (val)
             __sync_fetch_and_add(val, 1);
         
@@ -120,10 +139,12 @@ int xdp_ip_blacklist_filter(struct xdp_md *ctx) {
     // ========================================
     
     // Only check TCP packets for content
-    if (ip->protocol != IPPROTO_TCP)
+    __u8 protocol = BPF_CORE_READ(ip, protocol);
+    if (protocol != IPPROTO_TCP)
         return XDP_PASS;
     
-    u32 ihl_len = ip->ihl * 4;
+    __u8 ihl = BPF_CORE_READ(ip, ihl);
+    __u32 ihl_len = ihl * 4;
     if (ihl_len < sizeof(*ip))
         return XDP_PASS;
     
@@ -132,7 +153,8 @@ int xdp_ip_blacklist_filter(struct xdp_md *ctx) {
         return XDP_PASS;
     
     // Get payload
-    u32 tcp_hdr_len = tcp->doff * 4;
+    __u16 doff = BPF_CORE_READ_BITFIELD_PROBED(tcp, doff);
+    __u32 tcp_hdr_len = doff * 4;
     if (tcp_hdr_len < sizeof(*tcp))
         return XDP_PASS;
         
@@ -143,8 +165,8 @@ int xdp_ip_blacklist_filter(struct xdp_md *ctx) {
     // Check for "Test Data" pattern
     if (mem_match_testdata(payload, data_end)) {
         // Update global drop counter
-        u32 key = 0;
-        u64 *val = drop_cnt.lookup(&key);
+        __u32 key = 0;
+        __u64 *val = bpf_map_lookup_elem(&drop_cnt, &key);
         if (val)
             __sync_fetch_and_add(val, 1);
         
@@ -156,3 +178,5 @@ int xdp_ip_blacklist_filter(struct xdp_md *ctx) {
     
     return XDP_PASS;
 }
+
+char _license[] SEC("license") = "GPL";

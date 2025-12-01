@@ -1,34 +1,70 @@
 # =============================================================================
-# DDoS Defense Application Container
+# DDoS Defense Application Container (libbpf/CO-RE version)
 # =============================================================================
-# Contains: NFStream + ML Inference + XDP Controller
-# Base: Ubuntu 22.04 (matches development environment, good BCC support)
+# Contains: NFStream + ML Inference + XDP Controller (no BCC)
+# Base: Ubuntu 22.04
 # =============================================================================
-
-FROM ubuntu:22.04
+FROM ubuntu:22.04 AS builder
 
 LABEL maintainer="DDoS Defense System"
-LABEL description="Real-time DDoS defense with XDP, ML, and NFStream"
+LABEL description="Real-time DDoS defense with XDP (CO-RE), ML, and NFStream"
 
-# Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 
 # =============================================================================
-# Install System Dependencies
+# Build Stage: Compile XDP Program
+# =============================================================================
+RUN apt-get update && apt-get install -y \
+    clang \
+    llvm \
+    libbpf-dev \
+    linux-tools-common \
+    linux-tools-generic \
+    bpftool \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy XDP source
+COPY app/xdp_ip_blacklist.c /build/
+
+# Generate vmlinux.h from host BTF (if not provided)
+# Note: This requires kernel BTF support on build host
+RUN if [ ! -f /build/vmlinux.h ]; then \
+        if [ -f /sys/kernel/btf/vmlinux ]; then \
+            bpftool btf dump file /sys/kernel/btf/vmlinux format c > /build/vmlinux.h; \
+        else \
+            echo "WARNING: /sys/kernel/btf/vmlinux not found - using fallback"; \
+            echo "// Fallback vmlinux.h - replace with proper BTF dump" > /build/vmlinux.h; \
+        fi \
+    fi
+
+# Compile XDP program to BPF object
+RUN clang -O2 -g -target bpf \
+    -D__TARGET_ARCH_x86 \
+    -I/usr/include/bpf \
+    -c xdp_ip_blacklist.c \
+    -o xdp_ip_blacklist.o
+
+# =============================================================================
+# Runtime Stage
+# =============================================================================
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# =============================================================================
+# Install Runtime Dependencies (NO BCC, NO linux-headers)
 # =============================================================================
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-dev \
-    bpfcc-tools \
-    python3-bpfcc \
-    libbpfcc-dev \
+    libbpf1 \
+    bpftool \
     linux-tools-common \
     linux-tools-generic \
-    build-essential \
-    clang \
-    llvm \
-    linux-headers-generic \
     libpcap-dev \
     tcpdump \
     iproute2 \
@@ -64,19 +100,19 @@ RUN pip3 install --no-cache-dir \
 # Create Application Directory Structure
 # =============================================================================
 WORKDIR /app
-
 RUN mkdir -p /app/logs /app/models
+
+# =============================================================================
+# Copy Pre-compiled XDP Object from Builder
+# =============================================================================
+COPY --from=builder /build/xdp_ip_blacklist.o /app/
 
 # =============================================================================
 # Copy Application Files
 # =============================================================================
-
 # Copy ML models
 COPY models/trained_models.pkl /app/models/
 COPY models/preprocessing_objects.pkl /app/models/
-
-# Copy XDP program
-COPY app/xdp_ip_blacklist_bcc.c /app/
 
 # Copy Python scripts
 COPY app/nfstream_agent.py /app/
@@ -101,7 +137,7 @@ ENV ES_HOST=http://127.0.0.1:9200
 ENV ES_USER=elastic
 ENV ES_PASS=jgYsL5-kztDUSd8HyiNd
 ENV ARTIFACTS_DIR=/app/models
-ENV XDP_PROGRAM_PATH=/app/xdp_ip_blacklist_bcc.c
+ENV XDP_OBJECT_PATH=/app/xdp_ip_blacklist.o
 ENV CONFIDENCE_THRESHOLD=0.65
 ENV PYTHONUNBUFFERED=1
 

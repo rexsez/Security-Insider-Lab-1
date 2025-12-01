@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
 
   redis:
@@ -51,7 +53,6 @@ services:
         hard: 65536
 
 
-
   kibana:
     image: docker.elastic.co/kibana/kibana:8.19.6
     container_name: ddos-kibana
@@ -82,7 +83,6 @@ services:
       start_period: 120s
 
 
-
   ddos-app:
     build:
       context: ..
@@ -91,36 +91,60 @@ services:
     privileged: true
     network_mode: host
     volumes:
+      # Application files
       - ../config:/app/config
       - ../models:/app/models
       - ../logs:/app/logs
+      # CRITICAL: BPF filesystem mounts for CO-RE
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /sys/kernel/btf:/sys/kernel/btf:ro
+      - /sys/kernel/debug:/sys/kernel/debug:ro
     environment:
+      # Network configuration (set by start.sh)
       - NETWORK_INTERFACE=${NETWORK_INTERFACE:-ens33}
       - CAPTURE_INTERFACE=${CAPTURE_INTERFACE:-ens33}
+      
+      # Service endpoints (host network mode = localhost)
       - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
       - ES_HOST=http://127.0.0.1:9200
       - ES_USER=elastic
       - ES_PASS=${ES_PASS:-jgYsL5-kztDUSd8HyiNd}
       - KIBANA_SYSTEM_PASS=${KIBANA_SYSTEM_PASS:-ftcy6DoNKkMbmRrUlxgg}
+      
+      # Application configuration
       - ES_INDEX_PREFIX=netflows
       - ARTIFACTS_DIR=/app/models
       - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.65}
       - ENFORCEMENT_MODE=${ENFORCEMENT_MODE:-SIMULATE}
-      - XDP_PROGRAM_PATH=/app/xdp_ip_blacklist_bcc.c
+      
+      # XDP configuration (CO-RE/libbpf)
+      - XDP_OBJECT_PATH=/app/xdp_ip_blacklist.o
+      
+      # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
+    
     depends_on:
       redis:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
+    
     restart: unless-stopped
+    
+    # Required capabilities for XDP/eBPF
     cap_add:
-      - SYS_ADMIN
-      - NET_ADMIN
-      - BPF
-      - PERFMON
+      - SYS_ADMIN    # For BPF operations
+      - NET_ADMIN    # For network interface control
+      - BPF          # Explicit BPF capability (kernel 5.8+)
+      - PERFMON      # For perf events
+      - NET_RAW      # For packet capture
+    
+    # Security options
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
 
 
 
