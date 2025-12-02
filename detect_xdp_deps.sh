@@ -37,11 +37,11 @@ log_info "Detecting bpftool..."
 
 BPFTOOL_PATH=""
 BPFTOOL_LOCATIONS=(
+    "/usr/lib/linux-tools/$(uname -r)/bpftool"
+    "/usr/lib/linux-tools-$(uname -r)/bpftool"
     "/usr/sbin/bpftool"
     "/usr/bin/bpftool"
     "/sbin/bpftool"
-    "/usr/lib/linux-tools/$(uname -r)/bpftool"
-    "/usr/lib/linux-tools-$(uname -r)/bpftool"
 )
 
 # Also check in linux-tools directories
