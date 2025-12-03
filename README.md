@@ -180,7 +180,7 @@ docker logs -f ddos-app
 
 (Press `Ctrl+C` to stop following logs)
 
-**Expected Output**:
+**Expected output should be similar to**:
 
 ```
 Detecting network interface...
