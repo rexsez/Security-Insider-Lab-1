@@ -26,7 +26,7 @@ Recommended minimum specifications for deployment:
 | **Network** | XDP-capable NIC | Dedicated NIC | Bridged Mode required for VMs. |
 | **OS** | Linux (x86_64) | Linux (x86_64) | Ubuntu 22.04 LTS verified. |
 
-**Virtual Machine Users**: If running on VMware, VirtualBox, or KVM, you must use **Bridged Network Mode**. NAT mode hides source IPs which can cause some issues.
+**Virtual Machine Users**: If running on VMware, VirtualBox, or KVM, you must use **Bridged Network Mode**. NAT mode hides source IPs which can cause issues.
 
 ---
 
@@ -117,6 +117,57 @@ Make the scripts executable and run the startup script. This script handles depe
 ```bash
 chmod +x *.sh
 sudo ./start.sh
+```
+
+**Expected output should be similar to**:
+
+```
+==============================================
+    🛡️  DDoS Defense System
+==============================================
+
+Checking prerequisites...
+✓ Prerequisites OK
+
+Detecting XDP/BPF dependencies...
+...
+✓ XDP dependencies OK
+
+Detecting network interface...
+✓ Using interface: ens33
+
+Starting DDoS Defense System...
+
+[+] Running 5/5
+ ✔ Network docker_default           Created
+ ✔ Container ddos-redis             Started
+ ✔ Container ddos-elasticsearch     Started
+ ✔ Container ddos-kibana            Started
+ ✔ Container ddos-app               Started
+
+==============================================
+  Services Started!
+==============================================
+
+Network Interface: ens33
+
+Access points:
+  • Kibana:        http://localhost:5601
+  • Elasticsearch: http://localhost:9200
+  • Redis:         localhost:6379
+
+Credentials:
+  • User: elastic
+  • Pass: jgYsL5-kztDUSd8HyiNd
+
+Commands:
+  • View logs:    ./start.sh logs
+  • View app logs: ./start.sh logs ddos-app
+  • Check status: ./start.sh status
+  • Stop:         ./start.sh down
+  • Clean restart: ./start.sh clean
+
+Tip: Wait 2-3 minutes for Kibana dashboards to be imported
 ```
 
 ### 3. Monitor Startup
